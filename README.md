@@ -1,12 +1,35 @@
-# Mimonitor Toolbox
+# Mimonitor Toolbox（Linux 分支）
 
-Redmi G Pro 27U 2026显示器 ADB 控制工具
-测试机器系统版本号：HyperOS 3.0.112.0  
-不确定小米是否后续会对该行为进行阻止 且用且珍惜吧 尚不知2025是否可用  
-摸索了很久 有点地方写的也不怎么样 有问题欢迎issue  
-如果觉得本项目对你有帮助，欢迎点亮一颗 ⭐ (Star) 支持一下！或者，您也可以通过赞助 Sponsor 请我喝杯快乐水。开源不易，感谢认可！🙌  
+红米 G Pro 27U 显示器的 ADB 控制工具，**本分支专注于 Linux（Arch Linux）适配**。
 
-<img src="assets/e41e5c8458c34a6e2f7c46b92be05381.png" width="300"> <img src="assets/116be2f82c8a3f88e57f95cf4f11c0a9.jpg" width="300">
+> **上游项目**：[YiHoooong/Mimonitor_Toolbox](https://github.com/YiHoooong/Mimonitor_Toolbox)
+>
+> 本项目是上游的 Linux 适配分支。上游主要面向 Windows（另有 macOS 移植版），
+> 本分支在其基础上补充了 Linux 网卡枚举，并提供开箱即用的 AppImage 打包。
+> 功能实现、协议细节与原始设计均归功于上游作者。
+
+## 快速开始（Linux）
+
+从 [Releases](../../releases) 下载 AppImage，或从 [Actions](../../actions/workflows/appimage.yml) 取最新构建：
+
+```bash
+chmod +x mimonitor-toolbox-x86_64.AppImage
+./mimonitor-toolbox-x86_64.AppImage
+```
+
+- 自带 Python 与 Qt，**不依赖系统 Python**
+- 需要系统安装 `adb`：`sudo pacman -S android-tools`
+- 详细说明见 [README-linux.md](README-linux.md)
+
+## 本分支的改动
+
+| 改动 | 说明 |
+| --- | --- |
+| **Linux 网卡枚举** | 新增 `enumerate_linux_adapter_addresses()`，通过 `ip -j addr` 枚举网卡，内网自动扫描在 Linux 上可用 |
+| **AppImage 打包** | 新增 `packaging/appimage/`，产出约 44 MB 自包含 AppImage |
+| **CI** | `.github/workflows/appimage.yml`，在 Arch 容器内构建并做冒烟测试 |
+
+Windows / macOS 相关代码保持上游原样，行为不变。
 
 ## 软件截图
 
@@ -165,6 +188,18 @@ Mimonitor_Toolbox/
 
 ## 打包
 
+### Linux（AppImage，本分支）
+
+```bash
+./packaging/appimage/build-appimage.sh
+# 产物：dist-appimage/mimonitor-toolbox-x86_64.AppImage（约 44 MB）
+```
+
+CI 见 `.github/workflows/appimage.yml`，push 到 master 或打 `v*` tag 时自动构建并上传产物。
+体积优化细节见 [README-linux.md](README-linux.md#六构建-appimage)。
+
+### Windows（上游）
+
 ```bash
 # 安装锁定的构建依赖（需要 python.org 安装的 Python，
 # Microsoft Store 版缺少链接库，无法用于 Nuitka 编译）
@@ -186,6 +221,9 @@ python -m pip install -r requirements-build.txt
 - Python 3.10+
 - PyQt6（版本见 `requirements-build.txt`）
 - PyQt-Fluent-Widgets（版本见 `requirements-build.txt`）
-- ADB（打包进 exe，无需额外安装）
+- ADB（Linux 需自行安装 `android-tools`；Windows 打包进 exe，无需额外安装）
 
-## 感谢认可！🙌
+## 致谢
+
+本项目基于 [YiHoooong/Mimonitor_Toolbox](https://github.com/YiHoooong/Mimonitor_Toolbox) 修改，
+原始实现、协议逆向与设计均归功于上游作者。如果你觉得项目有用，欢迎给上游点个 ⭐。
