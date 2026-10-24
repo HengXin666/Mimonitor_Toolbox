@@ -1,71 +1,103 @@
-# Mimonitor Toolbox — Linux (Arch + KDE Wayland) 安装说明
+# Mimonitor Toolbox — Linux / Arch Linux 说明
 
-> 安装日期：2026-10-24 · 提交：`56fa67e8d990a2dd8d7ebe1b6865d3b18928d08d`
-> 安装方式：**完全隔离的 venv**，不改动系统 Python、不写系统目录。
+> 本仓库是上游的 **Arch Linux 适配分支**，提供可直接下载运行的 AppImage。
+> 上游：https://github.com/YiHoooong/Mimonitor_Toolbox
 
-## 1. 能用吗？—— 结论
+## 一、AppImage（推荐，免安装）
 
-| 功能 | Linux 状态 | 说明 |
-| --- | --- | --- |
-| GUI 启动 / 全部 10 个页面 | ✅ 正常 | 原生 Wayland 下渲染正常 |
-| 手动输入 IP 连接显示器 | ✅ 正常 | 走 `adb connect`，纯子进程调用 |
-| 读取/写入显示器参数（背光、色温等） | ✅ 应可用 | 依赖 adb + jar，jar 已随仓库自带 |
-| 内网自动扫描 | ❌ 不可用 | 网卡枚举走 Windows IP Helper API，日志提示"网卡枚举仅支持 Windows" |
-| Windows HDR / 全局快捷键 / 开机自启 | ❌ 不适用 | Windows 专属，代码已做平台保护，不会崩溃 |
-| 系统托盘 | ✅ 正常 | KDE 托盘可用 |
-| 打开 ADB CMD | ❌ 不适用 | 明确提示"仅支持 Windows" |
-| 打开 ADB Shell 终端 | ✅ 正常 | 自动寻找 konsole/gnome-terminal 等 |
+从 [Actions](../../actions/workflows/appimage.yml) 最新成功构建下载
+`mimonitor-toolbox-appimage` 压缩包，解出后：
 
-**一句话**：GUI 和核心调参功能在 Linux 上可用；**自动扫描不可用，请手动输入显示器 IP 连接**。
+```bash
+chmod +x mimonitor-toolbox-x86_64.AppImage
+./mimonitor-toolbox-x86_64.AppImage
+```
 
-## 2. 已知问题：XWayland(xcb) 下会段错误
+- 自带 Python 3.14 + Qt6 + 全部图形依赖，**不依赖系统 Python**
+- 需要系统有 `adb`：`sudo pacman -S android-tools`
+- 需要系统有 `ip`（网卡扫描用）：`sudo pacman -S iproute2`（Arch 默认已有）
+- 配置与日志：`~/.gpro_controller/`
+- 卸载：直接删掉这个文件即可
 
-在 `QT_QPA_PLATFORM=xcb`（即 XWayland）下启动会 **SIGSEGV 崩溃**，崩溃栈位于
-`QXcbWindow::handleNativeEvent`。原生 Wayland 平台插件下**没有此问题**。
+> FUSE 报错时：`sudo pacman -S fuse2`，或改用
+> `./mimonitor-toolbox-x86_64.AppImage --appimage-extract-and-run`
 
-因此 `run.sh` 默认强制 `QT_QPA_PLATFORM=wayland`。
-如果你运行在**纯 X11 会话**（非 KDE Wayland），此程序可能无法稳定运行——这是上游程序的问题，
-不是安装造成的。可用 `QT_QPA_PLATFORM=xcb ./run.sh` 自行试验。
-
-## 3. 启动方式
+## 二、源码 + venv
 
 ```bash
 cd ~/Apps/Mimonitor_Toolbox
 ./run.sh
 ```
 
-或在应用菜单里搜索 **"红米 G Pro 27U Toolbox"**。
+## 三、Linux 可用性
 
-## 4. 连接显示器
+| 功能 | 状态 | 说明 |
+| --- | --- | --- |
+| GUI 启动 / 全部 10 个页面 | ✅ | 原生 Wayland 下正常 |
+| **内网自动扫描** | ✅ | **本分支新增**，通过 `ip -j addr` 枚举网卡 |
+| 手动输入 IP 连接 | ✅ | 走 `adb connect` |
+| 调参（背光/色温/色域/灯效） | ✅ | 依赖 adb + 随包 jar |
+| Windows HDR / 全局快捷键 / 开机自启 | ❌ 不适用 | 有平台保护，不会崩 |
+| 系统托盘 | ✅ | KDE 托盘正常 |
+| 打开 ADB Shell 终端 | ✅ | 自动找 konsole 等 |
 
-1. 显示器需开启无线 ADB 调试（端口 5555）。
-2. 在本程序首页 **"显示器 IP"** 输入框中手动填写，例如 `192.168.1.50`。
-3. 点 **"开始连接"**。
+## 四、Linux 网卡枚举实现（本分支新增）
 
-> 本程序使用**私有 ADB server 端口 5038**，不会与你系统的 5037 端口冲突。
+上游的 `enumerate_windows_adapter_addresses()` 只支持 Windows，Linux 上直接抛错，
+导致"扫描内网"永远失败。本分支新增 `enumerate_linux_adapter_addresses()`：
 
-## 5. 依赖
+- 通过 `ip -j addr`（iproute2 JSON 输出）枚举，复用既有 `RawAdapterAddress` 结构，
+  上层筛选逻辑（`is_scan_adapter` / `_rejection_reason`）零改动
+- **物理网卡判定**：`/sys/class/net/<name>` 指向 `/sys/devices/virtual/` 的一律视为虚拟，
+  排除 lo / 网桥 / veth / docker / TUN(Tailscale、Mihomo 等)
+- **无线网卡识别**：`/sys/class/net/<name>/wireless` 存在则为 IEEE80211
+- **链路状态**：`flags` 含 `LOWER_UP` 且无 `NO-CARRIER` 才算已连接
+- 新增 `enumerate_adapter_addresses()` 按平台分派，Windows 行为完全不变
 
-- `adb`：已存在（`/usr/bin/adb`，android-tools 37.0.0）。若缺失：`sudo pacman -S android-tools`
-- Python 3.14.8（venv 内，不影响系统）
-- PyQt6 6.11.0 / PyQt6-Fluent-Widgets 1.11.2（仅装在 venv 内）
+实测（Arch + KDE Wayland，无线网卡）：
 
-## 6. 完全卸载（回滚）
-
-```bash
-~/Apps/Mimonitor_Toolbox/uninstall.sh
+```
+[扫描] 使用网卡 wlo1: 192.168.5.0/24
+[扫描] 待探测地址 253 个
+[扫描] 端口探测完成，1 个 IP 的 5555 端口开放
 ```
 
-该脚本删除：程序目录、`~/.gpro_controller`（配置/日志）、桌面入口。
-本安装**没有**修改任何系统文件、系统 Python 包或 systemd 服务。
+## 五、已知问题：XWayland(xcb) 下会段错误
 
-## 7. 测试记录
+`QT_QPA_PLATFORM=xcb` 启动会 SIGSEGV（崩溃栈在 `QXcbWindow::handleNativeEvent`）。
+原生 Wayland 插件下无此问题。`run.sh` 与 AppImage 的 `AppRun` 均默认
+`QT_QPA_PLATFORM=wayland`。纯 X11 会话下可能不稳定，属上游程序问题。
 
-- `pytest tests/` → **413 passed, 31 subtests passed**
-- 11 个模块在 Linux 上全部可导入
-- GUI 无头启动（offscreen）稳定运行 25s+
-- GUI 原生 Wayland 启动正常，10 个页面全部可切换
+## 六、构建 AppImage
 
-## 8. 应用数据位置
+```bash
+./packaging/appimage/build-appimage.sh
+# 产物：dist-appimage/mimonitor-toolbox-x86_64.AppImage
+```
 
-配置与日志：`~/.gpro_controller/`（`config.json`、`logs/`）
+CI 见 `.github/workflows/appimage.yml`，push 到 master 或打 tag 自动构建。
+
+### 体积优化（约 300 MB → 44 MB）
+
+1. **Qt 库依赖闭包裁剪**（`prune_qt.py`）：从实际 import 的 PyQt6 模块 + 平台插件
+   出发递归求闭包，只保留必需库。手工白名单极易漏依赖（如 `libqwayland.so`
+   间接依赖 WaylandClient），漏了就会回落到系统 Qt 6.12 而启动失败。
+2. **删除未用 Qt 组件**：QML、Quick3D、QuickControls2、Designer、Pdf、WebEngine、
+    Multimedia、翻译（~11 MB）、类型存根
+3. **删除 ffmpeg 系列**（~20 MB，无 Qt 模块链接）
+4. **标准库裁剪**：排除 test/idlelib/tkinter/ensurepip/pydoc_data/config-*
+5. **strip 全部 .so** + 删 `__pycache__`/`*.pyc`/`*.prl`
+6. **squashfs zstd level 22 + 1M block**（appimagetool 未编译 xz）
+
+> 关键教训：不要"先删库再补回"——必须让闭包算法一次算全，
+> 否则会漏掉插件间接依赖。
+
+### 自包含性
+
+构建脚本会 `ldd` 出 Qt 库与平台插件的全部外部依赖并复制进包内
+（glibc 核心交给系统，避免与宿主机冲突）。
+已在**无 libGL 的 archlinux 容器**中实测可正常启动。
+
+## 七、应用数据
+
+`~/.gpro_controller/`（`config.json`、`logs/`）
