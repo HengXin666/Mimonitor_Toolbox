@@ -162,6 +162,40 @@ fi
 cp -f "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_NAME.png" "$APPDIR/$APP_NAME.png" 2>/dev/null || true
 cp -f "$APPDIR/$APP_NAME.desktop" "$APPDIR/usr/share/applications/$APP_NAME.desktop" 2>/dev/null || true
 
+log "[6.5/8] 补齐外部依赖库（AppImage 约定：除 glibc 核心外全部自带）"
+# 逐个 ldd 出 Qt 库/插件的外部依赖，把系统里能找到的都复制进包内。
+# glibc 核心（libc/libm/libpthread/libdl/librt/ld-linux）必须由系统提供，
+# 强行打包会与宿主机 glibc 冲突；图形/字体/xcb 等则应自带，
+# 否则在精简容器或最小化系统上会报 "cannot open shared object file"。
+BUNDLE_DIR="$APP_ROOT/lib"
+GLIBC_KEEP="libc.so|libm.so|libpthread.so|libdl.so|librt.so|libresolv.so|ld-linux|libgcc_s.so|libstdc\+\+.so"
+
+collect_missing_libs() {
+  {
+    for f in "$QT6_DST"/lib/*.so.* "$QT6_DST"/plugins/platforms/*.so \
+             "$QT6_DST"/plugins/imageformats/*.so "$QT6_DST"/plugins/iconengines/*.so; do
+      [ -e "$f" ] || continue
+      ldd "$f" 2>/dev/null | awk '/=> \//{print $3}'
+    done
+  } | sort -u
+}
+
+bundled=0
+for libpath in $(collect_missing_libs); do
+  [ -e "$libpath" ] || continue
+  libname="$(basename "$libpath")"
+  # 已经在包内的跳过
+  if [ -e "$BUNDLE_DIR/$libname" ]; then
+    continue
+  fi
+  # glibc 核心交给系统
+  if echo "$libname" | grep -qE "$GLIBC_KEEP"; then
+    continue
+  fi
+  cp -L "$libpath" "$BUNDLE_DIR/$libname" 2>/dev/null && bundled=$((bundled + 1)) || true
+done
+echo "  已补齐 $bundled 个外部依赖库"
+
 log "[7/8] 打包 AppImage"
 # 工具下载到独立目录，避免和产物混在同一个目录里被误当成产物
 TOOL_DIR="$OUT_DIR/.tools"
