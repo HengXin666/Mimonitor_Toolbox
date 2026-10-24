@@ -163,7 +163,10 @@ cp -f "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_NAME.png" "$APPDIR/$APP
 cp -f "$APPDIR/$APP_NAME.desktop" "$APPDIR/usr/share/applications/$APP_NAME.desktop" 2>/dev/null || true
 
 log "[7/8] 打包 AppImage"
-TOOL="$OUT_DIR/appimagetool-x86_64.AppImage"
+# 工具下载到独立目录，避免和产物混在同一个目录里被误当成产物
+TOOL_DIR="$OUT_DIR/.tools"
+mkdir -p "$TOOL_DIR"
+TOOL="$TOOL_DIR/appimagetool-x86_64.AppImage"
 if [ ! -x "$TOOL" ]; then
   curl -fsSL -o "$TOOL" \
     https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage

@@ -18,12 +18,14 @@ jobs:
     container:
       image: archlinux:latest
       options: --privileged
+    env:
+      APPIMAGE_NAME: mimonitor-toolbox-x86_64.AppImage
     steps:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed \
             base-devel git python rsync curl file binutils \
-            zsync squashfs-tools imagemagick xorg-server-xvfb
+            zsync squashfs-tools imagemagick
 
       - uses: actions/checkout@v4
 
@@ -35,32 +37,52 @@ jobs:
       - name: Verify AppImage runs
         run: |
           set -euo pipefail
-          IMG=$(ls dist-appimage/*.AppImage | head -1)
+          IMG="dist-appimage/$APPIMAGE_NAME"
+          if [ ! -f "$IMG" ]; then
+            echo "未找到构建产物: $IMG"; ls -la dist-appimage; exit 1
+          fi
           echo "Testing: $IMG"
           chmod +x "$IMG"
-          # 在无头 X 下做冒烟测试：能起来并存活 8 秒即算通过
+          # 容器内没有 FUSE，用 --appimage-extract-and-run 解包运行
+          # 能起来并存活 8 秒（timeout 返回 124）即算通过
           export QT_QPA_PLATFORM=offscreen
-          timeout 8 "$IMG" > /tmp/smoke.log 2>&1 || code=$?
-          code=${code:-0}
-          cat /tmp/smoke.log || true
+          export MIMONITOR_SETTINGS_PATH=/tmp/smoke/config.json
+          code=0
+          timeout 8 "$IMG" --appimage-extract-and-run > /tmp/smoke.log 2>&1 || code=$?
+          echo "exit=$code"
+          tail -30 /tmp/smoke.log || true
           if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
             echo "AppImage 启动失败 (exit=$code)"; exit 1
           fi
-          echo "冒烟测试通过"
+          echo "冒烟测试通过（进程正常存活）"
+
+      - name: Verify Linux network enumeration
+        run: |
+          set -euo pipefail
+          # 校验 Linux 网卡枚举代码确实被打进包里（不是靠系统 Python）
+          IMG="dist-appimage/$APPIMAGE_NAME"
+          "$IMG" --appimage-extract > /dev/null 2>&1
+          SRC="squashfs-root/usr/lib/mimonitor-toolbox/mimonitor_toolbox/network_scan.py"
+          grep -q "enumerate_linux_adapter_addresses" "$SRC"
+          echo "Linux 网卡枚举代码已打包 ✓"
+          rm -rf squashfs-root
 
       - name: Show size
-        run: ls -lh dist-appimage/*.AppImage
+        run: |
+          ls -lh "dist-appimage/$APPIMAGE_NAME"
+          echo "大小: $(du -h "dist-appimage/$APPIMAGE_NAME" | cut -f1)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: mimonitor-toolbox-appimage
-          path: dist-appimage/*.AppImage
+          path: dist-appimage/mimonitor-toolbox-x86_64.AppImage
           if-no-files-found: error
+          retention-days: 90
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist-appimage/*.AppImage
+          files: dist-appimage/mimonitor-toolbox-x86_64.AppImage
           generate_release_notes: true
