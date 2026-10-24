@@ -95,3 +95,33 @@ jobs:
         with:
           files: dist-appimage/mimonitor-toolbox-x86_64.AppImage
           generate_release_notes: true
+          body: |
+            ## 红米 G Pro 27U Toolbox — Linux (Arch Linux) 版
+
+            基于上游 [YiHoooong/Mimonitor_Toolbox](https://github.com/YiHoooong/Mimonitor_Toolbox) 的 Linux 适配分支。
+
+            ### 下载
+
+            ```bash
+            chmod +x mimonitor-toolbox-x86_64.AppImage
+            ./mimonitor-toolbox-x86_64.AppImage
+            ```
+
+            ### 前置要求
+
+            - 系统需安装 `adb`：`sudo pacman -S android-tools`
+            - 网卡扫描需要 `ip`（`iproute2`，Arch 默认已有）
+            - FUSE 报错时：`sudo pacman -S fuse2`，或加 `--appimage-extract-and-run`
+
+            ### 本分支特性
+
+            - **内网自动扫描在 Linux 上可用**：新增 `enumerate_linux_adapter_addresses()`，
+              通过 `ip -j addr` 枚举网卡，自动排除 lo / 网桥 / veth / docker / TUN 等虚拟设备
+            - **自包含 AppImage**：内置 Python 3.14 + Qt6 + 全部图形依赖，不依赖系统 Python
+            - Windows 专属功能（HDR 联动、全局快捷键、开机自启）在 Linux 上不适用，
+              代码有平台保护，不会崩溃
+
+            ### 已知问题
+
+            - XWayland(`QT_QPA_PLATFORM=xcb`) 下会段错误，请使用原生 Wayland（默认已是）
+            - 需在显示器端允许 ADB 调试，否则连接状态为 `unauthorized`
