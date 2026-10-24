@@ -23,9 +23,11 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
+          # mesa 提供 libGL/libEGL：Qt Gui 与 wayland/xcb 插件硬依赖，
+          # 容器里默认没有，缺了冒烟测试会报 libGL.so.1 找不到。
           pacman -Syu --noconfirm --needed \
             base-devel git python rsync curl file binutils \
-            zsync squashfs-tools imagemagick
+            zsync squashfs-tools imagemagick mesa libxcb
 
       - uses: actions/checkout@v4
 
