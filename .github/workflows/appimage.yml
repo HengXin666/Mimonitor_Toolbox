@@ -23,11 +23,18 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
-          # mesa 提供 libGL/libEGL：Qt Gui 与 wayland/xcb 插件硬依赖，
-          # 容器里默认没有，缺了冒烟测试会报 libGL.so.1 找不到。
+          # 构建机需要完整的 Qt 图形依赖链：构建脚本会把 ldd 到的外部库
+          # 复制进 AppImage。容器里若缺这些库，ldd 也找不到，产物就会在
+          # 目标机上缺依赖（例如 libxkbcommon.so.0）。
           pacman -Syu --noconfirm --needed \
             base-devel git python rsync curl file binutils \
-            zsync squashfs-tools imagemagick mesa libxcb
+            zsync squashfs-tools imagemagick \
+            mesa libglvnd libxkbcommon libxkbcommon-x11 \
+            libxcb xcb-util xcb-util-cursor xcb-util-wm xcb-util-image \
+            xcb-util-keysyms xcb-util-renderutil \
+            wayland wayland-protocols \
+            fontconfig freetype2 glib2 dbus expat zlib zstd \
+            libpng brotli bzip2 krb5 systemd-libs libffi
 
       - uses: actions/checkout@v4
 
