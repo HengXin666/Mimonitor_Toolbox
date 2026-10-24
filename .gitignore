@@ -12,6 +12,7 @@ __pycache__/
 /dist-nuitka/
 /dist-nuitka-standalone/
 /dist-installer/
+/dist-appimage/
 
 # ── macOS ──
 .DS_Store

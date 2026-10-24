@@ -58,7 +58,23 @@ from .core import (
     load_settings,
     update_settings,
 )
-from .network_scan import enumerate_windows_adapter_addresses
+from . import network_scan as _network_scan
+from .network_scan import enumerate_adapter_addresses
+from .network_scan import enumerate_windows_adapter_addresses  # 兼容旧引用
+
+
+def _enumerate_scan_adapters():
+    """枚举网卡供「扫描设置」使用。
+
+    优先走平台分派（Windows: IP Helper / Linux: iproute2）。
+    若旧名字被替换（历史代码或测试 patch 了
+    enumerate_windows_adapter_addresses），则尊重替换结果。
+    """
+    if enumerate_windows_adapter_addresses is not (
+        _network_scan.enumerate_windows_adapter_addresses
+    ):
+        return enumerate_windows_adapter_addresses()
+    return enumerate_adapter_addresses()
 from .presets import BASELINE_PRESET_ID, find_preset, new_id, unique_name
 from .windows import list_windows_displays
 from .widgets import (
@@ -887,9 +903,9 @@ class PagesMixin:
     def _open_scan_settings(self):
         """打开「扫描设置」：勾选强制参与扫描的网卡 + 手输强制网段。"""
         try:
-            records = enumerate_windows_adapter_addresses()
+            records = _enumerate_scan_adapters()
         except Exception as error:
-            # 非 Windows / 枚举失败：仍然允许手输网段
+            # 枚举失败（缺 iproute2 等）：仍然允许手输网段
             records = []
             self.log(f"读取网卡列表失败，只能手输网段：{error}")
         dialog = ScanSettingsDialog(records, load_settings(), self)

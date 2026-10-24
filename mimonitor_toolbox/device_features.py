@@ -38,13 +38,31 @@ from .core import (
     load_settings,
     update_settings,
 )
+from . import network_scan as _network_scan
 from .network_scan import (
     WindowsAdapterError,
-    enumerate_windows_adapter_addresses,
+    enumerate_adapter_addresses,
+    enumerate_windows_adapter_addresses,  # 兼容旧引用
     is_scan_adapter,
     is_tcp_endpoint_open,
     parse_force_subnets,
 )
+
+
+def _enumerate_adapters_for_signature():
+    """为网络变化检测枚举网卡。
+
+    优先走平台分派（Windows: IP Helper / Linux: iproute2）；
+    若旧名字被替换（历史代码或测试 patch 了
+    enumerate_windows_adapter_addresses），则尊重替换结果。
+    """
+    if enumerate_windows_adapter_addresses is not (
+        _network_scan.enumerate_windows_adapter_addresses
+    ):
+        return enumerate_windows_adapter_addresses()
+    return enumerate_adapter_addresses()
+
+
 from .presets import (
     PICTURE_PRESET_JNI_KEYS,
     PICTURE_PRESET_SETTINGS_KEYS,
@@ -289,11 +307,11 @@ class DeviceFeaturesMixin:
 
     def _network_signature(self):
         try:
-            records = enumerate_windows_adapter_addresses()
+            records = _enumerate_adapters_for_signature()
         except WindowsAdapterError:
             return None
         except Exception as exc:
-            self.log(f"读取 Windows 网卡状态失败: {exc}")
+            self.log(f"读取网卡状态失败: {exc}")
             return None
         # 与扫描同一口径：包含 Hyper-V 虚拟交换机网卡和设置里的强制网卡/网段，
         # 否则外部交换机场景下"网络变化检测"会以为一直没有网络

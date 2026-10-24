@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import ctypes
 import ipaddress
+import json
+import os
 import socket
+import subprocess
 import sys
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -416,6 +419,7 @@ def _collect_networks(
     block_devices: Iterable[str] = (),
 ) -> dict[ipaddress.IPv4Network, ScanNetwork]:
     selected: dict[ipaddress.IPv4Network, ScanNetwork] = {}
+    skipped: list[str] = []
     for record in records:
         blocked = adapter_is_blocked(record, block_devices)
         forced = None if blocked or bypass_physical else adapter_force_reason(
@@ -423,7 +427,14 @@ def _collect_networks(
         )
         reason = _rejection_reason(record, forced, bypass_physical, blocked)
         if reason:
-            _log(log, f"[扫描] 跳过网卡 {record.interface_name} {record.local_ip}: {reason}")
+            # 虚拟网卡/未启用网卡太多，逐条打印会淹没日志；
+            # 只在用户显式关心（强制/屏蔽）时输出，其余汇总到末尾。
+            if blocked or adapter_force_reason(record, force_devices, force_subnets):
+                _log(
+                    log,
+                    f"[扫描] 跳过网卡 {record.interface_name} {record.local_ip}: {reason}",
+                )
+            skipped.append(f"{record.interface_name}({reason})")
             continue
         if forced:
             _log(
@@ -458,6 +469,12 @@ def _collect_networks(
             int(current.local_ip),
         ):
             selected[effective] = candidate
+    if skipped and not selected:
+        _log(
+            log,
+            f"[扫描] 没有可用的物理网卡（已跳过 {len(skipped)} 个："
+            f"{', '.join(skipped[:6])}{'...' if len(skipped) > 6 else ''}）",
+        )
     return selected
 
 
@@ -632,6 +649,127 @@ def enumerate_windows_adapter_addresses() -> list[RawAdapterAddress]:
     return records
 
 
+def enumerate_linux_adapter_addresses() -> list[RawAdapterAddress]:
+    """通过 ``ip -j addr`` 枚举 Linux 网卡的 IPv4 地址。
+
+    返回结构与 Windows 版保持一致，让上层筛选逻辑（is_scan_adapter、
+    _rejection_reason 等）无需改动即可复用。
+
+    字段映射约定：
+      - if_type：无线网卡 -> IF_TYPE_IEEE80211，其余 -> IF_TYPE_ETHERNET_CSMACD
+      - oper_status：operstate == "UP" -> IF_OPER_STATUS_UP，否则 0
+      - hardware_interface：lo / 网桥 / veth / tun 等虚拟设备为 False
+      - metric：用内核 ifindex 近似（Linux 没有 Windows 的 InterfaceMetric）
+    """
+
+    if sys.platform == "win32":
+        raise WindowsAdapterError("Linux 网卡枚举仅支持 Linux")
+
+    try:
+        raw = subprocess.run(
+            ["ip", "-j", "addr"], capture_output=True, text=True, timeout=5
+        )
+    except FileNotFoundError as exc:
+        raise WindowsAdapterError(
+            "未找到 ip 命令，请安装 iproute2：sudo pacman -S iproute2"
+        ) from exc
+    except Exception as exc:
+        raise WindowsAdapterError(f"执行 ip addr 失败: {exc}") from exc
+
+    if raw.returncode != 0:
+        raise WindowsAdapterError(f"ip addr 返回错误: {raw.stderr.strip()}")
+
+    try:
+        devices = json.loads(raw.stdout or "[]")
+    except ValueError as exc:
+        raise WindowsAdapterError(f"解析 ip addr 输出失败: {exc}") from exc
+
+    records: list[RawAdapterAddress] = []
+    for dev in devices:
+        name = str(dev.get("ifname") or "")
+        if not name:
+            continue
+        ifindex = int(dev.get("ifindex") or 0)
+        operstate = str(dev.get("operstate") or "").upper()
+        link_type = str(dev.get("link_type") or "")
+        flags = {str(item).upper() for item in (dev.get("flags") or [])}
+        is_wireless = _linux_is_wireless(name)
+        is_physical = _linux_is_physical(name, link_type)
+        # LOWER_UP 表示链路层已连通；NO-CARRIER 表示没插网线/没连上
+        has_carrier = "LOWER_UP" in flags and "NO-CARRIER" not in flags
+
+        for addr in dev.get("addr_info") or []:
+            if str(addr.get("family")) != "inet":
+                continue
+            try:
+                local_ip = ipaddress.IPv4Address(str(addr.get("local")))
+            except ValueError:
+                continue
+            records.append(
+                RawAdapterAddress(
+                    interface_index=ifindex,
+                    interface_name=name,
+                    local_ip=local_ip,
+                    prefix_length=int(addr.get("prefixlen") or 0),
+                    metric=ifindex,
+                    if_type=(
+                        IF_TYPE_IEEE80211 if is_wireless else IF_TYPE_ETHERNET_CSMACD
+                    ),
+                    oper_status=IF_OPER_STATUS_UP if operstate == "UP" else 0,
+                    hardware_interface=is_physical,
+                    adapter_description=name,
+                    filter_interface=False,
+                    media_connected=has_carrier,
+                    endpoint_interface=False,
+                )
+            )
+    return records
+
+
+def _linux_is_wireless(name: str) -> bool:
+    """无线网卡：/sys/class/net/<name>/wireless 存在即为无线。"""
+    try:
+        return os.path.exists(f"/sys/class/net/{name}/wireless")
+    except OSError:
+        return False
+
+
+def _linux_is_physical(name: str, link_type: str) -> bool:
+    """真实物理网卡判定，排除 lo / 网桥 / veth / tun / docker 等虚拟设备。"""
+    if name == "lo" or link_type in ("loopback", "none"):
+        return False
+    # /sys/class/net/<name> 指向 /sys/devices/virtual/... 的一定是虚拟设备
+    # （TUN/TAP、网桥、veth、docker 网桥、tailscale 等都在这里）
+    try:
+        real = os.path.realpath(f"/sys/class/net/{name}")
+        if "/devices/virtual/" in real:
+            return False
+    except OSError:
+        pass
+    # 有 device 软链说明挂在真实总线（PCI/USB）上
+    if os.path.exists(f"/sys/class/net/{name}/device"):
+        return True
+    virtual_prefixes = (
+        "veth", "docker", "br-", "virbr", "vnet", "tun", "tap", "wg",
+        "zt", "tailscale", "podman", "cni", "flannel", "kube", "dummy",
+        "mihomo", "clash", "singbox", "sing-box", "proxy",
+    )
+    return not name.lower().startswith(virtual_prefixes)
+
+
+def enumerate_adapter_addresses() -> list[RawAdapterAddress]:
+    """按当前平台枚举网卡地址（Windows 走 IP Helper，Linux 走 iproute2）。"""
+    if sys.platform == "win32":
+        return enumerate_windows_adapter_addresses()
+    return enumerate_linux_adapter_addresses()
+
+
+# 向后兼容别名：历史代码/测试按旧名字 patch 或引用。
+# 语义已改为"按平台分派"，Linux 下不再抛错。
+enumerate_windows_adapter_addresses_legacy = enumerate_windows_adapter_addresses
+enumerate_adapter_addresses_dispatch = enumerate_adapter_addresses
+
+
 def get_windows_scan_networks(
     log: Optional[Callable[[str], None]] = None,
     adapter_provider: Optional[Callable[[], list[RawAdapterAddress]]] = None,
@@ -641,7 +779,7 @@ def get_windows_scan_networks(
 ) -> list[ScanNetwork]:
     """枚举并筛选所有适合扫描的 Windows 局域网（含设置里的强制/排除规则）。"""
 
-    provider = adapter_provider or enumerate_windows_adapter_addresses
+    provider = adapter_provider or enumerate_adapter_addresses
     return select_scan_networks(
         provider(),
         log=log,

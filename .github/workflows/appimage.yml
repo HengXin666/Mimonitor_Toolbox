@@ -1,0 +1,66 @@
+name: Build AppImage (Arch Linux)
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    name: Build AppImage
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git python rsync curl file binutils \
+            zsync squashfs-tools imagemagick xorg-server-xvfb
+
+      - uses: actions/checkout@v4
+
+      - name: Build AppImage
+        run: |
+          chmod +x packaging/appimage/build-appimage.sh
+          ./packaging/appimage/build-appimage.sh "$GITHUB_WORKSPACE/dist-appimage"
+
+      - name: Verify AppImage runs
+        run: |
+          set -euo pipefail
+          IMG=$(ls dist-appimage/*.AppImage | head -1)
+          echo "Testing: $IMG"
+          chmod +x "$IMG"
+          # 在无头 X 下做冒烟测试：能起来并存活 8 秒即算通过
+          export QT_QPA_PLATFORM=offscreen
+          timeout 8 "$IMG" > /tmp/smoke.log 2>&1 || code=$?
+          code=${code:-0}
+          cat /tmp/smoke.log || true
+          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
+            echo "AppImage 启动失败 (exit=$code)"; exit 1
+          fi
+          echo "冒烟测试通过"
+
+      - name: Show size
+        run: ls -lh dist-appimage/*.AppImage
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mimonitor-toolbox-appimage
+          path: dist-appimage/*.AppImage
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-appimage/*.AppImage
+          generate_release_notes: true
